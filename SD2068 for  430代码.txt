@@ -1,0 +1,438 @@
+/***********************************************************************
+*             MSP430G2553 连接 SD2068 C程序（供参考）
+*  DCO：1Mhz
+*  占用2个IO： P1.4  P1.5
+*  特别感谢Mr.Ray提供此程序
+*  此程序在Mr.Ray提供的程序上修改
+*  2014.07.1
+***********************************************************************/
+#include<msp430G2553.h> 
+#include "dco_1m_delay.h"              //延时程序，可以自写
+#include "uart.h"                      //串口调试，可以去掉
+
+
+#define uchar unsigned char
+#define uint  unsigned int
+/***********************************************************************
+***函数定义
+***********************************************************************/
+uchar I2CStart(void);
+uchar I2CWaitAck(void) ;
+uchar I2CReceiveByte(void);
+
+void I2CStop(void);
+void I2CAck(void);
+void I2CNoAck(void);
+void I2CSendByte(uchar Byte);
+void I2CReadDate(void);
+void WriteTimeOn(void);
+void WriteTimeOff(void);
+void I2CWriteDate(void);
+
+/***********************************************************************
+***P1.5 SDA
+***********************************************************************/
+#define SDA_IN	    P1DIR &=~ BIT5     //输入
+#define SDA_OUT	    P1DIR |= BIT5      //输出
+#define SDA_H       P1OUT |= BIT5      //SDA = 1;     
+#define SDA_L       P1OUT &= ~BIT5     //SDA = 0;     
+#define SDA_Read    (P1IN & BIT5)      //数据读取  
+
+/***********************************************************************
+***P1.4 SCL
+***********************************************************************/
+#define SCL_IN	    P1DIR&=~BIT4	//输入
+#define SCL_OUT	    P1DIR|=BIT4 	//输出
+#define SCL_H       P1OUT |= BIT4       //SCL = 1;      
+#define SCL_L       P1OUT &= ~BIT4      //SCL = 0;     
+#define SCL_Read    (P1IN & BIT4)       //时钟读取 
+
+/**********************************************************************
+*返回值定义
+***********************************************************************/
+#define true  1
+#define false 0
+
+/**********************************************************************
+*初始化时间InitTime 依次为：年、月、日、星期、时、分、秒。
+*默认：13年12月31日23时59分50秒
+***********************************************************************/ 
+uchar   ReadTime[7]; //用于存放读取数值 
+uchar   InitTime[7]={0x13,0x12,0x31,0x02,0x23,0x59,0x50};
+
+
+
+/**********************************************************************
+*开启 SD2068 的 I2C 总线
+***********************************************************************/
+uchar I2CStart(void)
+{
+    	SDA_OUT;SCL_OUT;
+	_NOP();
+    	SDA_H;SCL_H;	
+	_NOP();_NOP();
+	SDA_IN;
+	_NOP();_NOP();
+	if(!SDA_Read)return false;	//总线忙-->>退出
+	SDA_OUT;
+	_NOP();
+	SDA_L;	
+	_NOP();_NOP();
+	SDA_IN;    	
+	_NOP();_NOP();
+	while(SDA_Read)return false;	//总线出错-->>退出
+	SCL_L;	
+	_NOP();_NOP();
+	return true;
+
+}
+
+/**********************************************************************
+*关闭 SD2068 的 I2C 总线
+***********************************************************************/
+
+void I2CStop(void)
+{
+        SCL_OUT;SDA_OUT;
+	_NOP();
+	SDA_L;
+	_NOP();
+	SCL_L;
+	_NOP();_NOP();
+	SCL_H;
+	_NOP();_NOP();
+	SDA_H;
+}
+
+/**********************************************************************
+*发送 ACK
+***********************************************************************/
+void I2CAck(void)
+{	
+        SCL_OUT;SDA_OUT;
+	_NOP();_NOP();
+	SDA_L;	
+	_NOP();_NOP();
+	SCL_L;	
+	_NOP();_NOP();
+	SCL_H;	
+	_NOP();_NOP();
+	SCL_L;	
+}
+
+/**********************************************************************
+*发送 NO ACK
+***********************************************************************/
+void I2CNoAck(void)
+{	
+        SCL_OUT;SDA_OUT;
+	_NOP();
+	SDA_H;	
+	_NOP();
+	SCL_L;	
+	_NOP();_NOP();
+	SCL_H;	
+	_NOP();_NOP();
+	SCL_L;	
+}
+
+/**********************************************************************
+*读取ACK信号--------返回值:  1 --> 有ACK;  0 --> 无ACK
+***********************************************************************/
+
+uchar I2CWaitAck(void) 			 //返回为:1=有ACK,0=无ACK
+{
+	uchar Wait=255;
+	SCL_OUT;
+	SDA_IN;
+	_NOP();
+	SCL_L;	
+	_NOP();_NOP();
+	SCL_H;	
+	_NOP();
+	SDA_IN;
+	_NOP();
+	while(SDA_Read)	
+	{
+		Wait--;
+		_NOP();
+		if(!Wait)
+		{_NOP();_NOP();
+		SCL_L;
+		return false;
+                 }
+	}
+	SCL_L;	
+	return true;
+}
+/**********************************************************************
+*MCU 向 SD2068 发送一个字节------数据从高位到低位
+***********************************************************************/     
+void I2CSendByte(uchar Byte)		
+{
+	uchar bd=8;                                                        
+	SDA_OUT;
+	SCL_OUT;
+		while(bd--)
+		{
+			SCL_L;  
+			_NOP();
+			if(Byte&0x80)
+			{SDA_H;}
+			 else
+			{SDA_L;}
+			Byte<<=1;
+			_NOP();
+			SCL_H;
+			_NOP();
+		}
+		SCL_L;	
+}
+/**********************************************************************
+*MCU 从 SD2068 读取一个字节------数据从高位到低位
+***********************************************************************/  
+uchar I2CReceiveByte(void) 		
+{
+	uchar i=8;
+	uchar Byte=0;
+	SCL_OUT;
+	_NOP();
+	_NOP();
+	SDA_IN;			 	//c51中为SDA=1;端口切换为输入状态！！
+	_NOP();
+	while(i--)
+	{
+		Byte<<=1;              //数据从高位开始读取
+		_NOP();
+		SCL_L;
+		_NOP();_NOP();	        
+		SCL_H;
+		_NOP();_NOP();	
+		if(SDA_Read)
+		{
+			Byte|=0x01;    //非零写1，否则移位，默认为0
+		}
+	}
+	SCL_L;
+	return Byte;
+}
+/**********************************************************************
+*读 SD2068 实时数据寄存器(就是读取时间)
+***********************************************************************/  
+void I2CReadDate(void)
+{
+	uchar n;
+	I2CStart();
+	I2CSendByte(0x65); 
+	I2CWaitAck();
+	for(n=0;n<7;n++)
+	{
+		ReadTime[n]=I2CReceiveByte();
+		if (n!=6)        	 //最后一个数据不应答
+		{
+			I2CAck();
+		}
+	}
+	I2CNoAck();
+	_NOP();
+	I2CStop();
+}
+/**********************************************************************
+*允许写入SD2068
+***********************************************************************/  
+void WriteTimeOn(void)
+{		
+	I2CStart();
+	I2CSendByte(0x64);      
+	I2CWaitAck();   
+    	I2CSendByte(0x10);		//设置写地址10H      
+	I2CWaitAck();	
+	I2CSendByte(0x80);		//置WRTC1=1      
+	I2CWaitAck();
+	I2CStop(); 
+	
+	I2CStart();
+	I2CSendByte(0x64);      
+	I2CWaitAck();   
+    	I2CSendByte(0x0F);		//设置写地址0FH      
+	I2CWaitAck();	
+	I2CSendByte(0xFF);		//置WRTC2,WRTC3=1      
+	I2CWaitAck();
+	I2CStop(); 
+	
+}
+
+/**********************************************************************
+*禁止写入SD2068
+***********************************************************************/  
+void WriteTimeOff(void)
+{	
+	I2CStart();
+	I2CSendByte(0x64);      
+	I2CWaitAck();   
+   	I2CSendByte(0x0F);		//设置写地址0FH      
+	I2CWaitAck();	
+	I2CSendByte(0x7B) ;		//置WRTC2,WRTC3=0      
+	I2CWaitAck();
+	I2CSendByte(0x0) ;		//置WRTC1=0(10H地址)      
+	I2CWaitAck();
+	I2CStop(); 
+}
+/**********************************************************************
+*写SD2068实时数据寄存器（初始化值以及修改可用）
+***********************************************************************/  
+void I2CWriteDate(void)
+{		
+
+        WriteTimeOn();				//首先得允许写入
+
+	I2CStart();
+	I2CSendByte(0x64);      
+	I2CWaitAck();   
+    	I2CSendByte(0x00);			//设置写起始地址      
+	I2CWaitAck();	
+	I2CSendByte(InitTime[6]);		//秒    
+	I2CWaitAck();	
+	I2CSendByte(InitTime[5]);		//分      
+	I2CWaitAck();	
+	I2CSendByte(InitTime[4]|0x80);		//时间（注意12/24进制关系，选择24小时制需要把最高位置1）     
+	I2CWaitAck();	
+	I2CSendByte(InitTime[3]);		//周
+	I2CWaitAck();	
+	I2CSendByte(InitTime[2]);		//日      
+	I2CWaitAck();	
+	I2CSendByte(InitTime[1]);		//月      
+	I2CWaitAck();	
+	I2CSendByte(InitTime[0]);		//年      
+	I2CWaitAck();	
+	I2CStop();
+     
+	WriteTimeOff();    			//写完记得关闭写入
+}
+
+/******写SD2068单字节程序******/
+void WriteOneByte(uchar add, uchar date)
+{		
+	WriteTimeOn();
+	
+	I2CStart();
+	I2CSendByte(0x64);      
+	I2CWaitAck();   
+        I2CSendByte(add);			//设置写地址      
+	I2CWaitAck();	
+        I2CSendByte(date);			//写数据
+	I2CWaitAck();	
+	I2CStop(); 
+	
+	WriteTimeOff(); 
+}
+
+/******读SD2068单字节程序******/
+uchar ReadOneByte(uchar add)
+{		
+	uchar buf;
+	I2CStart();
+	I2CSendByte(0x64);      
+	I2CWaitAck();   
+  	I2CSendByte(add);		//设置要读的地址      
+	I2CWaitAck();
+	I2CStart();	
+ 	I2CSendByte(0x65);		//写数据
+	I2CWaitAck();	
+	buf=I2CReceiveByte();		//读数据
+	I2CNoAck();
+	I2CStop(); 
+	return  buf;
+}
+
+/******设置SD2068报警中断演示程序******/
+void WriteALARM(void)           	//设置报警时间：2012年2月14日 8：00
+{
+	WriteOneByte(0x09,0x08);    	//8时
+	WriteOneByte(0x0b,0x14);	//14日
+	WriteOneByte(0x0c,0x02);	//02月
+	WriteOneByte(0x0d,0x12);	//12年
+	WriteOneByte(0x0e,0x74);	//设置报警允许（使能年、月、日、小时报警）
+	WriteOneByte(0x10,0x92);	//设置INT中断选通（INTS1，INTS0），及报警中断总允许位（INTAE）
+}
+
+/******关闭SD2068报警中断程序******/
+void ClrALARM(void)           		//关闭报警中断
+{
+	WriteOneByte(0x10,0x90);
+}
+/******设置SD2068倒计时中断******/
+void SetDjs(void)           		//设置倒计时中断
+{
+	WriteOneByte(0x10,0x0f);      	//先清倒计时中断总允许位（INTDE）
+	WriteOneByte(0x10,0xf4);	//设置周期性中断（IM=1）INT中断选通（INTS1，INTS0），配置倒计时中断总允许位（INTDE）
+	WriteOneByte(0x11,0x30);	//选择定时器频率源（TDS1、TDS0）为1/60HZ
+	WriteOneByte(0x13,1);      	//倒计时初值寄存器，设置8位倒计时计数初值（5min）
+}
+
+/******关闭SD2068倒计时中断程序******/
+void ClrDjs(void)          
+{
+	WriteOneByte(0x10,0xf0);
+}
+/******设置SD2068频率中断******/
+void SetFrq(void)					
+{
+	WriteOneByte(0x10,0xa1);    	//选通频率中断（INTS1，INTS0），设置频率中断总允许位（INTFE）
+	WriteOneByte(0x11,0x09);	//设置2Hz频率中断
+}
+/******关闭SD2068频率中断******/
+void ClrFrq(void)         
+{
+	WriteOneByte(0x10,0xa0);
+}
+
+
+
+/*********延时子程序*********/
+void Delay(uint nn)
+{
+   while(nn--);
+}
+
+/**********************************************************************
+*主函数演示
+***********************************************************************/  
+void main(void)
+{    
+  
+/**********************************************************************
+*初始化MSP430G2553
+***********************************************************************/ 
+   WDTCTL = WDTPW + WDTHOLD;       // 关闭看门狗
+   BCSCTL2 = SELM_0 + DIVM_0 + DIVS_0; 
+   if (CALBC1_1MHZ != 0xFF) 
+    {
+        DCOCTL = 0x00;
+        BCSCTL1 = CALBC1_1MHZ;     
+        DCOCTL = CALDCO_1MHZ;
+     }
+   	BCSCTL1 |= XT2OFF + DIVA_0;
+   	TACTL |= TASSEL_2;
+   	UartInit();	//初始化串口，用于查看程序运行进度
+   
+	I2CWriteDate(); //设置时间
+//	WriteALARM();   //设置报警中断时间
+//	SetDjs();	//设置倒计时中断
+	SetFrq();	//设置频率中断
+	
+   while(1)
+   {
+ 	        I2CReadDate(); 		                //读实时时钟		
+                printf("%02x--",ReadTime[6]);		//年
+                printf("%02x--",ReadTime[5]);		//月
+                printf("%02x",ReadTime[4]);		//日 
+                printf("%02x--",ReadTime[2]&0x7F);	//时
+                printf("%02x--",ReadTime[1]);		//分
+                printf("%02x",ReadTime[0]);		//秒
+                printf("Week:%02x",ReadTime[3]);	//周
+        //需要十进制输出，自行转换即可，注意“时”的最高位
+        delay_1ms(500);delay_1ms(500);
+        printf("\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b");
+    }
+}
